@@ -14,6 +14,7 @@ class Plugin:
     # Hardcode path for Steam Deck as Decky plugins might run as root
     STEAM_CONFIG_PATH = Path("/home/deck/.local/share/Steam/config")
     LOGINUSERS_VDF = STEAM_CONFIG_PATH / "loginusers.vdf"
+    USERDATA_PATH = Path("/home/deck/.local/share/Steam/userdata")
     
     # Asyncio-compatible long-running code, executed in a task when the plugin is loaded
     async def _main(self):
@@ -115,22 +116,65 @@ class Plugin:
                     break
             
             if not manifest_file:
-                decky.logger.info(f"Manifest for {appid} not found")
+                decky.logger.info(f"Manifest for {appid} not found in {len(library_folders)} libs")
+                # Log libs for debugging
+                # decky.logger.info(f"Checked libs: {[str(l) for l in library_folders]}")
                 return None
                 
-            # 3. Read manifest to get LastOwner
+            # 3. Read manifest to get LastOwner and InstalledBy
             with open(manifest_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-                
-            owner_match = re.search(r'"LastOwner"\s+"(\d+)"', content)
+            
+            result = {}
+            # Use ignorecase and handle potenital surrounding quotes variance
+            owner_match = re.search(r'"LastOwner"\s+"(\d+)"', content, re.IGNORECASE)
             if owner_match:
-                return owner_match.group(1)
+                result["last_owner"] = owner_match.group(1)
+            
+            installer_match = re.search(r'"InstalledBy"\s+"(\d+)"', content, re.IGNORECASE)
+            if installer_match:
+                result["installed_by"] = installer_match.group(1)
+            
+            # Send first 500 chars to frontend for debugging
+            result["_debug_snippet"] = content[:500]
+
+            if not result.get("last_owner") and not result.get("installed_by"):
+                decky.logger.warn(f"Found manifest for {appid} but no owner info found")
                 
-            return None
+            return result
             
         except Exception as e:
             decky.logger.error(f"Error getting game owner: {e}")
             return None
+
+    async def get_local_owners(self, appid: str):
+        """Scan userdata folders to find users who have config for this app (played/owned)"""
+        owners = []
+        if not self.USERDATA_PATH.exists():
+            return []
+            
+        for user_dir in self.USERDATA_PATH.iterdir():
+            if not user_dir.is_dir() or not user_dir.name.isdigit():
+                continue
+                
+            local_config = user_dir / "config" / "localconfig.vdf"
+            if not local_config.exists():
+                continue
+                
+            try:
+                with open(local_config, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    # Check if AppID appears as a key (indicating playtime/config)
+                    # We look for "AppID" followed by {
+                    if re.search(rf'"{appid}"\s*\{{', content):
+                        # Convert Steam3 to SteamID64
+                        steam3 = int(user_dir.name)
+                        steam64 = steam3 + 76561197960265728
+                        owners.append(str(steam64))
+            except Exception as e:
+                decky.logger.error(f"Error scanning user {user_dir.name}: {e}")
+                
+        return owners
 
     async def switch_user(self, steamid: str):
         """Switch to a different Steam user by updating loginusers.vdf"""

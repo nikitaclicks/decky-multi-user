@@ -9,7 +9,7 @@ import {
   afterPatch,
   wrapReactType
 } from "@decky/ui";
-import { definePlugin, callable, routerHook } from "@decky/api";
+import { definePlugin, callable, routerHook, fetchNoCors } from "@decky/api";
 import { FaUsers, FaUserCircle, FaSyncAlt } from "react-icons/fa";
 import { useState, useEffect, ReactElement } from "react";
 
@@ -26,7 +26,8 @@ interface SteamUser {
 // Backend methods
 const getUsers = callable<[], SteamUser[]>("get_users");
 const getCurrentUser = callable<[], SteamUser | null>("get_current_user");
-const getGameOwner = callable<[string], string | null>("get_game_owner");
+const getGameOwner = callable<[string], { last_owner?: string; installed_by?: string; _debug_snippet?: string } | null>("get_game_owner");
+const getLocalOwners = callable<[string], string[]>("get_local_owners");
 const switchUser = callable<[string], { success: boolean; error?: string }>("switch_user");
 const restartSteam = callable<[], { success: boolean; error?: string }>("restart_steam");
 
@@ -192,27 +193,82 @@ function Content() {
 
 const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any }) => {
   const [ownerName, setOwnerName] = useState<string | null>(null);
+  const [localPlayers, setLocalPlayers] = useState<string[]>([]);
+  const [status, setStatus] = useState<string>("Checking...");
 
   useEffect(() => {
     // console.log("OwnerLabel mounted for AppID:", appId);
     const fetchOwner = async () => {
       try {
-        const [ownerId, currentUser, allUsers] = await Promise.all([
+        setStatus("Checking...");
+        // Fetch all data in parallel
+        const [ownerData, currentUser, allUsers, localOwnersIds] = await Promise.all([
             getGameOwner(appId),
             getCurrentUser(),
-            getUsers()
+            getUsers(),
+            getLocalOwners(appId)
         ]);
         
-        // console.log("Owner Fetch Result:", { appId, ownerId, currentUser: currentUser?.steamid });
+        console.log("[MultiUser] Data Fetch:", { appId, ownerData, localOwnersIds });
 
-        if (ownerId && currentUser && ownerId !== currentUser.steamid) {
-             const owner = allUsers.find(u => u.steamid === ownerId);
-             if (owner) {
-                 setOwnerName(owner.personaName);
-             }
+        // --- 1. Identify License Owner ---
+        let licenseOwnerDisplayName = "Unknown";
+        
+        if (ownerData && ownerData.last_owner) {
+            const ownerId = ownerData.last_owner;
+            
+            // Is it the current user?
+            if (currentUser && ownerId === currentUser.steamid) {
+                licenseOwnerDisplayName = "You";
+            } else {
+                // Is it a known local user?
+                const localUser = allUsers.find(u => u.steamid === ownerId);
+                if (localUser) {
+                    licenseOwnerDisplayName = localUser.personaName;
+                } else {
+                    // Remote user - try to fetch web info or just show ID for now
+                    // We can do the async fetch separately if needed, but for now denote as Remote
+                    licenseOwnerDisplayName = `Remote (${ownerId})`;
+                    
+                    // Optional: Fire and forget remote fetch? 
+                    // Keeping it simple for now to avoid React state race conditions in this snippet
+                    try {
+                        // Quick sync check if we can (async inside async)
+                        fetchNoCors(`https://steamcommunity.com/profiles/${ownerId}/?xml=1`).then(async res => {
+                            if (res.ok) {
+                                const text = await res.text();
+                                const nameMatch = text.match(/<steamID><!\[CDATA\[(.*?)\]\]><\/steamID>/) || text.match(/<steamID>(.*?)<\/steamID>/);
+                                if (nameMatch && nameMatch[1]) {
+                                     setOwnerName(prev => (prev && prev.includes("Remote")) ? `${nameMatch[1]} (Remote)` : prev);
+                                }
+                            }
+                        });
+                    } catch (e) {}
+                }
+            }
         }
+        setOwnerName(licenseOwnerDisplayName);
+
+        // --- 2. Identify Local Players (Config Owners) ---
+        const playerNames: string[] = [];
+        if (localOwnersIds && localOwnersIds.length > 0) {
+            for (const id of localOwnersIds) {
+                const user = allUsers.find(u => u.steamid === id);
+                if (user) {
+                     if (currentUser && user.steamid === currentUser.steamid) {
+                         playerNames.push("You");
+                     } else {
+                         playerNames.push(user.personaName);
+                     }
+                }
+            }
+        }
+        setLocalPlayers(playerNames);
+        setStatus("Ready");
+
       } catch (e) {
         console.error("Error fetching owner for label", e);
+        setStatus("Error");
       }
     };
     fetchOwner();
@@ -221,8 +277,13 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any }) => {
   // Debugging: Get button state from overview if available
   const buttonState = overview?.display_status || overview?.status_string || "Unknown State";
 
-  // CHANGED: Always render for debugging verification
-  // if (!ownerName) return null;
+  if (status === "Checking...") {
+      return (
+        <PanelSectionRow>
+             <div style={{ padding: "10px", opacity: 0.7 }}>Checking ownership...</div>
+        </PanelSectionRow>
+      );
+  }
 
   return (
     <PanelSectionRow>
@@ -237,10 +298,34 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any }) => {
           border: '1px solid #1a9fff',
           boxShadow: '0 4px 8px rgba(0,0,0,0.2)'
       }}>
-        <FaUsers style={{ color: "#1a9fff" }} />
-        <div style={{ display: "flex", flexDirection: "column" }}>
-            <span>Owned by <strong>{ownerName || "Checking..."}</strong></span>
-            <span style={{ fontSize: "0.8em", opacity: 0.7 }}>State: {buttonState} (ID: {appId})</span>
+        <FaUsers style={{ color: "#1a9fff", fontSize: "1.5em" }} />
+        <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+            
+            {/* License Owner Line */}
+            <div style={{ marginBottom: "4px" }}>
+                <span style={{ opacity: 0.8, fontSize: "0.9em" }}>Licensed to: </span>
+                <span style={{ fontWeight: "bold", color: "white" }}>{ownerName}</span>
+            </div>
+
+            {/* Local Players Line */}
+            {localPlayers.length > 0 && (
+                <div>
+                    <span style={{ opacity: 0.8, fontSize: "0.9em" }}>Played by: </span>
+                    <span style={{ fontWeight: "bold", color: "#4CAF50" }}>
+                        {localPlayers.join(", ")}
+                    </span>
+                </div>
+            )}
+             {localPlayers.length === 0 && (
+                <div style={{ fontSize: "0.8em", opacity: 0.5, fontStyle: "italic" }}>
+                    No local config found
+                </div>
+            )}
+
+            {/* Debug State */}
+            {/* <div style={{ fontSize: "0.7em", opacity: 0.5, marginTop: "4px" }}>
+                State: {buttonState} (ID: {appId})
+            </div> */}
         </div>
       </div>
     </PanelSectionRow>
@@ -267,7 +352,7 @@ const patchAppPage = () => {
                      const appId = overview?.appid;
                      if (!appId) return ret1;
 
-                     console.log("[MultiUser] Patching renderFunc. AppID:", appId);
+                     // console.log("[MultiUser] Patching renderFunc. AppID:", appId);
 
                      wrapReactType(ret1.props.children);
                      afterPatch(
@@ -278,7 +363,7 @@ const patchAppPage = () => {
                                 ret2.props.children?.[1]?.props.children.props
                                     .children;
                             
-                            console.log("[MultiUser] componentToSplice exists:", !!componentToSplice, "Length:", componentToSplice?.length);
+                            // console.log("[MultiUser] componentToSplice exists:", !!componentToSplice, "Length:", componentToSplice?.length);
 
                              // Look for where to insert - typically before the game details/overview
                             const spliceIndex = componentToSplice?.findIndex(
@@ -290,26 +375,32 @@ const patchAppPage = () => {
                                 }
                             );
                             
-                            console.log("[MultiUser] Found spliceIndex:", spliceIndex);
+                            // console.log("[MultiUser] Found spliceIndex:", spliceIndex);
 
-                            const component = <OwnerLabel appId={appId.toString()} overview={overview} />;
 
-                            if (spliceIndex > -1) {
-                                // Simple check to avoid duplicating if we re-render
-                                // This is tricky with raw React elements, but splice in place
-                                // is usually "okay" if the hook runs once per render cycle.
-                                
-                                // To act like existing plugins, just insert.
-                                componentToSplice?.splice(
+                            // CHECK FOR DUPLICATES / EXISTING
+                            // We look for our component to either update or insert it.
+                            const existingIndex = componentToSplice?.findIndex((child: any) => {
+                                return child?.type === OwnerLabel; 
+                            });
+
+                            // Use a key to force React to remount/reset state when appId changes
+                            const component = <OwnerLabel key={appId} appId={appId.toString()} overview={overview} />;
+
+                            if (existingIndex !== -1) {
+                                // Replace existing instance to ensure props (appId) are updated
+                                // console.log("[MultiUser] Updating existing label for AppID:", appId);
+                                componentToSplice[existingIndex] = component;
+                            } else if (spliceIndex > -1) {
+                                // Insert new
+                                componentToSplice.splice(
                                     Math.max(0, spliceIndex),
                                     0,
                                     component
                                 );
                             } else {
-                                // If we couldn't find the insertion point, log it
+                                // Fallback
                                 console.warn("[MultiUser] Could not find splice index. Attempting fallback unshift.");
-                                
-                                // Fallback: Try to find ANY index to insert at, e.g. at the top
                                 if (componentToSplice && Array.isArray(componentToSplice)) {
                                      componentToSplice.unshift(component);
                                 }
