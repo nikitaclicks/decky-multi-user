@@ -190,7 +190,7 @@ function Content() {
   );
 }
 
-const OwnerLabel = ({ appId }: { appId: string }) => {
+const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any }) => {
   const [ownerName, setOwnerName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -218,7 +218,11 @@ const OwnerLabel = ({ appId }: { appId: string }) => {
     fetchOwner();
   }, [appId]);
 
-  if (!ownerName) return null;
+  // Debugging: Get button state from overview if available
+  const buttonState = overview?.display_status || overview?.status_string || "Unknown State";
+
+  // CHANGED: Always render for debugging verification
+  // if (!ownerName) return null;
 
   return (
     <PanelSectionRow>
@@ -234,7 +238,10 @@ const OwnerLabel = ({ appId }: { appId: string }) => {
           boxShadow: '0 4px 8px rgba(0,0,0,0.2)'
       }}>
         <FaUsers style={{ color: "#1a9fff" }} />
-        <span>Owned by <strong>{ownerName}</strong></span>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+            <span>Owned by <strong>{ownerName || "Checking..."}</strong></span>
+            <span style={{ fontSize: "0.8em", opacity: 0.7 }}>State: {buttonState} (ID: {appId})</span>
+        </div>
       </div>
     </PanelSectionRow>
   );
@@ -256,10 +263,11 @@ const patchAppPage = () => {
                 'renderFunc',
                 (_: Record<string, unknown>[], ret1: ReactElement) => {
                      // Extract AppID
-                     const appId = ret1.props.children.props.overview?.appid;
+                     const overview = ret1.props.children.props.overview;
+                     const appId = overview?.appid;
                      if (!appId) return ret1;
 
-                     // console.log("Patching renderFunc for AppID:", appId);
+                     console.log("[MultiUser] Patching renderFunc. AppID:", appId);
 
                      wrapReactType(ret1.props.children);
                      afterPatch(
@@ -270,6 +278,8 @@ const patchAppPage = () => {
                                 ret2.props.children?.[1]?.props.children.props
                                     .children;
                             
+                            console.log("[MultiUser] componentToSplice exists:", !!componentToSplice, "Length:", componentToSplice?.length);
+
                              // Look for where to insert - typically before the game details/overview
                             const spliceIndex = componentToSplice?.findIndex(
                                 (child: ReactElement) => {
@@ -279,8 +289,10 @@ const patchAppPage = () => {
                                     );
                                 }
                             );
+                            
+                            console.log("[MultiUser] Found spliceIndex:", spliceIndex);
 
-                            const component = <OwnerLabel appId={appId.toString()} />;
+                            const component = <OwnerLabel appId={appId.toString()} overview={overview} />;
 
                             if (spliceIndex > -1) {
                                 // Simple check to avoid duplicating if we re-render
@@ -295,7 +307,7 @@ const patchAppPage = () => {
                                 );
                             } else {
                                 // If we couldn't find the insertion point, log it
-                                // console.warn("Could not find splice index in", componentToSplice);
+                                console.warn("[MultiUser] Could not find splice index. Attempting fallback unshift.");
                                 
                                 // Fallback: Try to find ANY index to insert at, e.g. at the top
                                 if (componentToSplice && Array.isArray(componentToSplice)) {
@@ -363,7 +375,7 @@ export default definePlugin(() => {
         
         if (libraryAppPagePatch) {
             // @ts-ignore
-            serverApi.routerHook.removePatch(
+            routerHook.removePatch(
                 '/library/app/:appid',
                 libraryAppPagePatch
             );
