@@ -164,13 +164,43 @@ class Plugin:
             try:
                 with open(local_config, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                    # Check if AppID appears as a key (indicating playtime/config)
-                    # We look for "AppID" followed by {
-                    if re.search(rf'"{appid}"\s*\{{', content):
-                        # Convert Steam3 to SteamID64
-                        steam3 = int(user_dir.name)
-                        steam64 = steam3 + 76561197960265728
-                        owners.append(str(steam64))
+                    
+                    # Find the AppID block
+                    match = re.search(rf'"{appid}"\s*({{)', content)
+                    if match:
+                        start_brace_idx = match.start(1)
+                        
+                        # Find matching closing brace
+                        depth = 0
+                        in_quote = False
+                        end_brace_idx = -1
+                        
+                        for i in range(start_brace_idx, len(content)):
+                            char = content[i]
+                            if char == '"' and (i == 0 or content[i-1] != '\\'):
+                                in_quote = not in_quote
+                            elif not in_quote:
+                                if char == '{':
+                                    depth += 1
+                                elif char == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        end_brace_idx = i
+                                        break
+                        
+                        if end_brace_idx != -1:
+                            block_content = content[start_brace_idx:end_brace_idx+1]
+                            
+                            # Check for PlayTime > 0
+                            # PlayTime is in minutes. "at least 1 second" -> > 0 minutes is the best proxy locally.
+                            pt_match = re.search(r'"PlayTime"\s+"(\d+)"', block_content, re.IGNORECASE)
+                            if pt_match:
+                                playtime = int(pt_match.group(1))
+                                if playtime > 0:
+                                    steam3 = int(user_dir.name)
+                                    steam64 = steam3 + 76561197960265728
+                                    owners.append(str(steam64))
+
             except Exception as e:
                 decky.logger.error(f"Error scanning user {user_dir.name}: {e}")
                 

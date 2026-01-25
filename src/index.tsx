@@ -191,7 +191,7 @@ function Content() {
   );
 }
 
-const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any }) => {
+const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: string]: any }) => {
   const [ownerName, setOwnerName] = useState<string | null>(null);
   const [localPlayers, setLocalPlayers] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("Checking...");
@@ -363,6 +363,11 @@ const patchAppPage = () => {
                                 ret2.props.children?.[1]?.props.children.props
                                     .children;
                             
+                            if (!componentToSplice || !Array.isArray(componentToSplice)) {
+                                // console.log("[MultiUser] componentToSplice is not an array or missing");
+                                return ret2;
+                            }
+                            
                             // console.log("[MultiUser] componentToSplice exists:", !!componentToSplice, "Length:", componentToSplice?.length);
 
                              // Look for where to insert - typically before the game details/overview
@@ -381,11 +386,11 @@ const patchAppPage = () => {
                             // CHECK FOR DUPLICATES / EXISTING
                             // We look for our component to either update or insert it.
                             const existingIndex = componentToSplice?.findIndex((child: any) => {
-                                return child?.type === OwnerLabel; 
+                                return child?.type === OwnerLabel || child?.props?._source === "decky-multi-user"; 
                             });
 
                             // Use a key to force React to remount/reset state when appId changes
-                            const component = <OwnerLabel key={appId} appId={appId.toString()} overview={overview} />;
+                            const component = <OwnerLabel key={appId} appId={appId.toString()} overview={overview} _source="decky-multi-user" />;
 
                             if (existingIndex !== -1) {
                                 // Replace existing instance to ensure props (appId) are updated
