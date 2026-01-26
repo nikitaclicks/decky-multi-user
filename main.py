@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -19,19 +20,45 @@ settings = SettingsManager(name="settings", settings_directory=settingsDir)
 settings.read()
 
 
+def get_steam_user():
+    """Get the username of the user running Steam (typically 'deck' on Steam Deck)."""
+    # Try DECKY_USER environment variable first (set by decky-loader)
+    decky_user = os.environ.get("DECKY_USER")
+    if decky_user:
+        return decky_user
+    # Fallback: check who owns the Steam directory
+    steam_paths = [
+        Path("/home/deck/.steam"),
+        Path.home() / ".steam"
+    ]
+    for steam_path in steam_paths:
+        if steam_path.exists():
+            try:
+                return steam_path.owner()
+            except (KeyError, OSError):
+                pass
+    # Default fallback for Steam Deck
+    return "deck"
+
+
+# Get the Steam user dynamically
+STEAM_USER = get_steam_user()
+STEAM_HOME = Path(f"/home/{STEAM_USER}")
+
+
 class Plugin:
-    # Hardcode path for Steam Deck as Decky plugins might run as root
-    STEAM_CONFIG_PATH = Path("/home/deck/.local/share/Steam/config")
+    # Paths are determined dynamically based on the Steam user
+    STEAM_CONFIG_PATH = STEAM_HOME / ".local/share/Steam/config"
     LOGINUSERS_VDF = STEAM_CONFIG_PATH / "loginusers.vdf"
-    USERDATA_PATH = Path("/home/deck/.local/share/Steam/userdata")
+    USERDATA_PATH = STEAM_HOME / ".local/share/Steam/userdata"
     # Registry file contains AutoLoginUser - key for account switching!
-    REGISTRY_VDF = Path("/home/deck/.steam/registry.vdf")
+    REGISTRY_VDF = STEAM_HOME / ".steam/registry.vdf"
     # File to store pending game launch after account switch
     PENDING_LAUNCH_FILE = Path("/tmp/decky_multiuser_pending_launch.json")
     
     # Asyncio-compatible long-running code, executed in a task when the plugin is loaded
     async def _main(self):
-        decky.logger.info("Multi-User Manager loaded")
+        decky.logger.info("Quick User Switcher loaded")
         asyncio.create_task(self._check_pending_launch())
 
     # Settings management
@@ -64,7 +91,7 @@ class Plugin:
             await asyncio.sleep(delay)
             
             result = subprocess.run(
-                ['sudo', '-u', 'deck', 'steam', f'steam://rungameid/{appid}'],
+                ['sudo', '-u', STEAM_USER, 'steam', f'steam://rungameid/{appid}'],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -89,16 +116,16 @@ class Plugin:
     # Function called first during the unload process, utilize this to handle your plugin being stopped, but not
     # completely removed
     async def _unload(self):
-        decky.logger.info("Multi-User Manager unloaded")
+        decky.logger.info("Quick User Switcher unloaded")
 
     # Function called after `_unload` during uninstall, utilize this to clean up processes and other remnants of your
     # plugin that may remain on the system
     async def _uninstall(self):
-        decky.logger.info("Multi-User Manager uninstalled")
+        decky.logger.info("Quick User Switcher uninstalled")
 
     # Migrations that should be performed before entering `_main()`.
     async def _migration(self):
-        decky.logger.info("Migrating Multi-User Manager")
+        decky.logger.info("Migrating Quick User Switcher")
     
     async def trigger_pending_launch(self):
         """Called by frontend when it loads - checks for pending game launch"""
@@ -287,7 +314,7 @@ class Plugin:
                     with open(self.REGISTRY_VDF, 'w', encoding='utf-8') as f:
                         f.write(registry_content)
                     try:
-                        shutil.chown(self.REGISTRY_VDF, user="deck", group="deck")
+                        shutil.chown(self.REGISTRY_VDF, user=STEAM_USER, group=STEAM_USER)
                     except Exception as e:
                         decky.logger.warn(f"Failed to chown registry.vdf: {e}")
                 else:
@@ -339,7 +366,7 @@ class Plugin:
                 with open(self.LOGINUSERS_VDF, 'w', encoding='utf-8') as f:
                     f.write(content)
                 try:
-                    shutil.chown(self.LOGINUSERS_VDF, user="deck", group="deck")
+                    shutil.chown(self.LOGINUSERS_VDF, user=STEAM_USER, group=STEAM_USER)
                 except Exception as e:
                     decky.logger.warn(f"Failed to chown loginusers.vdf: {e}")
             

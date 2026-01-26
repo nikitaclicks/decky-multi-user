@@ -1,49 +1,73 @@
-# Decky Multi-User Manager
+# Quick User Switcher
 
-A Decky Loader plugin to simplify switching between user accounts on the Steam Deck.
+A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck that simplifies switching between Steam accounts.
 
 ## Features
 
-- **Quick Account Switching**: Switch accounts directly from the library or quick access menu (planned).
-- **Avoid "Borrow" Dialog**: Bypass the "borrow" button prompt when accessing games shared across accounts on the same device.
+- **Quick Account Switching**: Switch between Steam accounts directly from the Quick Access Menu
+- **Smart Game Detection**: Detects when a game is owned by a different account and offers one-click switching
+- **Switch & Play**: Automatically launches games after switching to the correct account
+- **No More "Borrow" Dialogs**: Bypass the tedious borrow button when accessing Family Shared games on the same device
+
+## Screenshots
+
+<!-- TODO: Add screenshots -->
 
 ## Installation
 
-### From the Decky Store
+### From the Decky Plugin Store (Recommended)
 
-1. Open the Quick Access Menu (QAM) on your Steam Deck.
-2. Go to the Decky Loader plugin tab (the plug icon).
-3. Select the store icon.
-4. Search for "Multi-User Manager" and install.
+1. Open the Quick Access Menu (QAM) on your Steam Deck
+2. Navigate to the Decky Loader plugin tab (plug icon)
+3. Open the plugin store
+4. Search for "Quick User Switcher" and install
 
 ### Manual Installation
 
-1. Clone this repository.
-2. Run `pnpm i` to install dependencies.
-3. Run `pnpm run build` to build the plugin.
-4. Copy the resulting folder (or use the Decky CLI) to your Steam Deck's plugin directory (`~/homebrew/plugins`).
+1. Download the latest release from the [Releases](https://github.com/nikitaclicks/decky-multi-user/releases) page
+2. Extract to `~/homebrew/plugins/`
+3. Restart Decky Loader
 
 ## Development
 
 ### Prerequisites
 
-- Node.js v16.14+
-- pnpm v9
-- Python (for backend)
+- Node.js v18+
+- pnpm v9+
+- [Decky CLI](https://github.com/SteamDeckHomebrew/cli)
 
-### Building
+### Setup
 
 ```bash
+# Install dependencies
 pnpm install
+
+# Build the plugin
 pnpm run build
 ```
 
-To watch for changes during development:
+### Development Workflow
 
 ```bash
+# Watch mode for development
 pnpm run watch
+
+# Deploy to Steam Deck (requires VS Code tasks setup)
+# See .vscode/tasks.json for available tasks
 ```
+
+## How It Works
+
+The plugin works by:
+1. Reading Steam's `loginusers.vdf` to enumerate available accounts
+2. Modifying `registry.vdf` to set the AutoLoginUser for switching
+3. Restarting Steam to apply the account change
+4. Optionally queuing a game launch after the switch completes
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-BSD-3-Clause
+BSD-3-Clause - see [LICENSE](LICENSE) for details.
