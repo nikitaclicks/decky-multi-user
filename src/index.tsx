@@ -29,11 +29,6 @@ const getCurrentUser = callable<[], SteamUser | null>("get_current_user");
 const getGameOwner = callable<[string], { last_owner?: string; installed_by?: string; _debug_snippet?: string } | null>("get_game_owner");
 const getLocalOwners = callable<[string], string[]>("get_local_owners");
 const switchUser = callable<[string, string, string?], { success: boolean; error?: string }>("switch_user");
-const debugRegistry = callable<[], { exists: boolean; auto_login_user?: string; remember_password?: string; snippet?: string; error?: string }>("debug_registry");
-const testPendingLaunch = callable<[string], { success: boolean; message: string }>("test_pending_launch");
-const checkPendingFile = callable<[], { exists: boolean; path: string; content: string | null }>("check_pending_file");
-
-// Removed old UI injection logic. We use Router Patch now.
 
 // Check for pending game launch - called when frontend loads
 const triggerPendingLaunch = callable<[], void>("trigger_pending_launch");
@@ -67,8 +62,6 @@ function Content() {
 
   useEffect(() => {
     loadUsers();
-    // Check for pending game launch when frontend loads (after Steam restart)
-    triggerPendingLaunch().catch(e => console.error("Pending launch check failed:", e));
   }, []);
 
   const handleSwitchUser = async (user: SteamUser) => {
@@ -134,47 +127,51 @@ function Content() {
     );
   }
 
+  // Filter out current user from the switch list
+  const otherUsers = users.filter(u => u.steamid !== currentUser?.steamid);
+
   return (
-    <PanelSection title="Account Management">
+    <PanelSection title="Accounts">
       {currentUser && (
         <PanelSectionRow>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-            <FaUserCircle size={16} />
-            <div>
-              <div style={{ fontWeight: "bold" }}>Current User</div>
-              <div style={{ fontSize: "0.9em", opacity: 0.7 }}>{currentUser.personaName}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px", backgroundColor: "rgba(76, 175, 80, 0.1)", borderRadius: "4px", border: "1px solid rgba(76, 175, 80, 0.3)" }}>
+            <FaUserCircle size={20} style={{ color: "#4CAF50" }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: "bold" }}>{currentUser.personaName}</div>
+              <div style={{ fontSize: "0.8em", opacity: 0.6 }}>@{currentUser.accountName}</div>
             </div>
+            <div style={{ fontSize: "0.75em", color: "#4CAF50", fontWeight: "bold" }}>ACTIVE</div>
           </div>
         </PanelSectionRow>
       )}
 
-      <PanelSectionRow>
-        <div style={{ fontSize: "0.9em", fontWeight: "bold", marginBottom: "4px" }}>
-          Available Accounts ({users.length})
-        </div>
-      </PanelSectionRow>
-
-      <Focusable style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {users.map((user) => (
-          <ButtonItem
-            key={user.steamid}
-            layout="below"
-            disabled={switching || user.steamid === currentUser?.steamid}
-            onClick={() => handleSwitchUser(user)}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <FaUsers size={14} />
-              <div style={{ flex: 1 }}>
-                <div>{user.personaName}</div>
-                <div style={{ fontSize: "0.8em", opacity: 0.6 }}>@{user.accountName}</div>
-              </div>
-              {user.steamid === currentUser?.steamid && (
-                <div style={{ fontSize: "0.8em", color: "#4CAF50" }}>Active</div>
-              )}
+      {otherUsers.length > 0 && (
+        <>
+          <PanelSectionRow>
+            <div style={{ fontSize: "0.85em", opacity: 0.7, marginTop: "8px", marginBottom: "4px" }}>
+              Switch to:
             </div>
-          </ButtonItem>
-        ))}
-      </Focusable>
+          </PanelSectionRow>
+          <Focusable style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            {otherUsers.map((user) => (
+              <ButtonItem
+                key={user.steamid}
+                layout="below"
+                disabled={switching}
+                onClick={() => handleSwitchUser(user)}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <FaUsers size={14} />
+                  <div style={{ flex: 1 }}>
+                    <div>{user.personaName}</div>
+                    <div style={{ fontSize: "0.8em", opacity: 0.6 }}>@{user.accountName}</div>
+                  </div>
+                </div>
+              </ButtonItem>
+            ))}
+          </Focusable>
+        </>
+      )}
 
       {users.length === 0 && (
         <PanelSectionRow>
@@ -192,46 +189,6 @@ function Content() {
             <FaSyncAlt size={14} />
             Refresh
           </div>
-        </ButtonItem>
-      </PanelSectionRow>
-
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={async () => {
-            const result = await debugRegistry();
-            console.log("Registry debug:", result);
-            alert(`AutoLoginUser: ${result.auto_login_user || 'not set'}\nRememberPassword: ${result.remember_password || 'not set'}\nExists: ${result.exists}`);
-          }}
-        >
-          Debug Registry
-        </ButtonItem>
-      </PanelSectionRow>
-
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={async () => {
-            const result = await checkPendingFile();
-            console.log("Pending file check:", result);
-            alert(`Exists: ${result.exists}\nPath: ${result.path}\nContent: ${result.content || 'N/A'}`);
-          }}
-        >
-          Check Pending File
-        </ButtonItem>
-      </PanelSectionRow>
-
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={async () => {
-            // Test with a common game like Aperture Desk Job (appid 1902490)
-            const result = await testPendingLaunch("1902490");
-            console.log("Test launch result:", result);
-            alert(result.message);
-          }}
-        >
-          Test Launch (Desk Job)
         </ButtonItem>
       </PanelSectionRow>
     </PanelSection>
@@ -377,7 +334,7 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
         <ConfirmModal
             strTitle="Switch Account"
             strDescription={`Switch to ${targetName} to play this game? Steam will restart and launch the game.`}
-            strOKButtonText="Switch & Play"
+            strOKButtonText="Switch User & Play"
             strCancelButtonText="Cancel"
             onOK={async () => {
                 try {
@@ -397,65 +354,75 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
       return null;
   }
 
+  // Full-width row with button and info text
   return (
-    <PanelSectionRow>
-     <div 
-        style={{
-          padding: "10px",
-          backgroundColor: "#3d4450", 
-          borderRadius: "4px",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          marginBottom: "10px",
-          border: '1px solid #1a9fff',
-          boxShadow: '0 4px 8px rgba(0,0,0,0.2)'
+    <div style={{ 
+      display: "flex", 
+      alignItems: "center", 
+      gap: "16px",
+      padding: "10px 12px",
+      backgroundColor: "#23262e",
+      borderRadius: "4px",
+      marginBottom: "8px"
+    }}>
+      {/* Switch & Play Button */}
+      {targetId && (
+        <Focusable onActivate={handleOwnerClick}>
+          <div
+            onClick={handleOwnerClick}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#2b5a83"}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "#1a9fff"}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: "#1a9fff",
+              borderRadius: "2px",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              cursor: "pointer",
+              fontWeight: "500",
+              color: "white",
+              fontSize: "14px",
+              lineHeight: "20px",
+              textTransform: "uppercase",
+              letterSpacing: "0.5px",
+              whiteSpace: "nowrap"
+            }}
+          >
+            <FaUsers size={14} />
+            Switch User & Play
+          </div>
+        </Focusable>
+      )}
+      
+      {/* Info text - always visible */}
+      <div style={{ 
+        display: "flex", 
+        gap: "8px", 
+        alignItems: "center",
+        fontSize: "13px",
+        flex: 1,
+        opacity: 0.85
       }}>
-        <FaUsers style={{ color: "#1a9fff", fontSize: "1.5em" }} />
-        <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-            
-            {/* License Owner Line */}
-            <div style={{ marginBottom: "4px" }}>
-                <span style={{ opacity: 0.8, fontSize: "0.9em" }}>Licensed to: </span>
-                <span style={{ fontWeight: "bold", color: "white" }}>{ownerName}</span>
-            </div>
-
-            {/* Local Players Line */}
-            {localPlayers.length > 0 && (
-                <div>
-                    <span style={{ opacity: 0.8, fontSize: "0.9em" }}>Played by: </span>
-                    <span style={{ fontWeight: "bold", color: "#4CAF50" }}>
-                        {localPlayers.join(", ")}
-                    </span>
-                </div>
-            )}
-             {localPlayers.length === 0 && (
-                <div style={{ fontSize: "0.8em", opacity: 0.5, fontStyle: "italic" }}>
-                    No local config found
-                </div>
-            )}
-        </div>
-        
-        {targetId && (
-            <ButtonItem
-                layout="below"
-                onClick={handleOwnerClick}
-                style={{
-                    width: "auto",
-                    minWidth: "80px",
-                    padding: "4px 12px",
-                    fontSize: "0.9em",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    height: "auto"
-                }}
-            >
-                Switch
-            </ButtonItem>
-        )}
+        <FaUserCircle size={14} style={{ opacity: 0.6 }} />
+        <span>
+          <span style={{ color: "#1a9fff", fontWeight: "500" }}>{targetName}</span>
+          <span style={{ opacity: 0.6 }}>'s account</span>
+          {ownerName !== targetName && (
+            <span>
+              <span style={{ opacity: 0.6 }}> • licensed to </span>
+              <span style={{ fontWeight: "500" }}>{ownerName}</span>
+            </span>
+          )}
+          {localPlayers.length > 0 && localPlayers[0] !== targetName && (
+            <span>
+              <span style={{ opacity: 0.6 }}> • played by </span>
+              <span style={{ color: "#4CAF50" }}>{localPlayers.join(", ")}</span>
+            </span>
+          )}
+        </span>
       </div>
-    </PanelSectionRow>
+    </div>
   );
 };
 
@@ -549,6 +516,9 @@ const patchAppPage = () => {
 };
 
 export default definePlugin(() => {
+  // Check for pending game launch immediately when plugin loads (after Steam restart)
+  triggerPendingLaunch().catch(e => console.error("[MultiUser] Pending launch check failed:", e));
+
   let libraryAppPagePatch: any;
   let patchInterval: number | null = null;
   
@@ -585,9 +555,9 @@ export default definePlugin(() => {
 
   return {
     // The name shown in various decky menus
-    name: "Multi-User Manager",
+    name: "Quick User Switcher",
     // The element displayed at the top of your plugin's menu
-    titleView: <div className={staticClasses.Title}>Multi-User Manager</div>,
+    titleView: <div className={staticClasses.Title}>Quick User Switcher</div>,
     // The content of your plugin's menu
     content: <Content />,
     // The icon displayed in the plugin list

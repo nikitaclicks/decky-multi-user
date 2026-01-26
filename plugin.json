@@ -1,11 +1,11 @@
 {
-  "name": "decky-multi-user",
+  "name": "Quick User Switcher",
   "author": "nikitaclicks",
   "flags": ["debug", "_root"],
   "api_version": 1,
   "publish": {
     "tags": ["utility", "root"],
     "description": "Quickly switch between Steam accounts without navigating through menus. Simplifies multi-user Steam Deck usage by allowing instant account switching from the Quick Access Menu.",
-    "image": "https://opengraph.githubassets.com/1/SteamDeckHomebrew/PluginLoader"
+    "image": "https://opengraph.githubassets.com/1/nikitaclicks/decky-multi-user"
   }
 }

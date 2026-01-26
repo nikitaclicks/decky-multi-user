@@ -59,7 +59,7 @@ class Plugin:
             
             # Wait a bit for Steam to fully initialize after login
             # This delay is crucial - Steam needs time to complete login
-            delay = data.get('delay', 30)
+            delay = data.get('delay', 3)
             decky.logger.info(f"Waiting {delay}s for Steam to be ready...")
             await asyncio.sleep(delay)
             
@@ -84,8 +84,8 @@ class Plugin:
             if self.PENDING_LAUNCH_FILE.exists():
                 self.PENDING_LAUNCH_FILE.unlink()
 
-    def _save_pending_launch(self, appid: str, delay: int = 3):
-        """Save appid for launch after Steam restart. Delay is short since frontend triggers after Steam is up."""
+    def _save_pending_launch(self, appid: str, delay: int = 0):
+        """Save appid for launch after Steam restart. No delay needed since frontend triggers after Steam is up."""
         try:
             data = {'appid': appid, 'delay': delay, 'timestamp': time.time()}
             with open(self.PENDING_LAUNCH_FILE, 'w') as f:

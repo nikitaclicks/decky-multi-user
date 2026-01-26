@@ -1,6 +1,6 @@
 {
   "name": "decky-multi-user",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "description": "A Decky plugin to quickly switch accounts from the library.",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SteamDeckHomebrew/decky-plugin-template.git"
+    "url": "git+https://github.com/nikitaclicks/decky-multi-user.git"
   },
   "keywords": [
     "decky",
@@ -20,12 +20,12 @@
     "multi-user",
     "account-switcher"
   ],
-  "author": "Decky User",
+  "author": "Nikita Dmitriev",
   "license": "BSD-3-Clause",
   "bugs": {
-    "url": "https://github.com/SteamDeckHomebrew/decky-plugin-template/issues"
+    "url": "https://github.com/nikitaclicks/decky-multi-user/issues"
   },
-  "homepage": "https://github.com/SteamDeckHomebrew/decky-plugin-template#readme",
+  "homepage": "https://github.com/nikitaclicks/decky-multi-user#readme",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.1",
