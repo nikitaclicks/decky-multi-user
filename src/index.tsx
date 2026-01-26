@@ -249,6 +249,7 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   const [localPlayers, setLocalPlayers] = useState<string[]>([]);
   const [shouldShow, setShouldShow] = useState<boolean>(false);
   const [showConfirmation, setShowConfirmation] = useState<boolean>(true);
+  const [isSwitching, setIsSwitching] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchOwner = async () => {
@@ -376,9 +377,11 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
             await setSetting(SETTING_SHOW_CONFIRMATION, false);
             setShowConfirmation(false);
           }
+          setIsSwitching(true);
           switchUser(targetId, targetAccountName, appId);
         } catch (e) {
           console.error("Switch exception", e);
+          setIsSwitching(false);
         }
       };
 
@@ -421,6 +424,26 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   }
 
   // Full-width row with button and info text
+  if (isSwitching) {
+    return (
+      <div style={{ 
+        display: "flex", 
+        alignItems: "center", 
+        justifyContent: "center",
+        gap: "12px",
+        padding: "14px 12px",
+        backgroundColor: "#23262e",
+        borderRadius: "4px",
+        marginBottom: "8px"
+      }}>
+        <FaSyncAlt size={16} style={{ animation: "spin 1s linear infinite" }} />
+        <span style={{ fontSize: "14px", fontWeight: "500" }}>
+          Switching to {targetName}... Please wait
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div style={{ 
       display: "flex", 
@@ -569,6 +592,20 @@ export default definePlugin(() => {
   // Check for pending game launch immediately when plugin loads (after Steam restart)
   triggerPendingLaunch().catch(e => console.error("[MultiUser] Pending launch check failed:", e));
 
+  // Inject CSS animation for spinning icon
+  const styleId = "decky-multi-user-styles";
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   let libraryAppPagePatch: any;
   let patchInterval: number | null = null;
   
@@ -610,6 +647,10 @@ export default definePlugin(() => {
     // The function triggered when your plugin unloads
     onDismount() {
         if (patchInterval) clearInterval(patchInterval);
+        
+        // Remove injected styles
+        const styleEl = document.getElementById("decky-multi-user-styles");
+        if (styleEl) styleEl.remove();
         
         if (libraryAppPagePatch) {
             // @ts-ignore
