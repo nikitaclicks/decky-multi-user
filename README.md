@@ -11,7 +11,9 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for S
 
 ## Screenshots
 
-<!-- TODO: Add screenshots -->
+| Quick Access Menu | Game Library |
+|:-----------------:|:------------:|
+| ![Plugin Screen](images/plugin-screen.png) | ![Game Screen](images/game-screen.png) |
 
 ## Installation
 
