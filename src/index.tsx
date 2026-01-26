@@ -7,7 +7,8 @@ import {
   ConfirmModal,
   showModal,
   afterPatch,
-  wrapReactType
+  wrapReactType,
+  ToggleField
 } from "@decky/ui";
 import { definePlugin, callable, routerHook, fetchNoCors } from "@decky/api";
 import { FaUsers, FaUserCircle, FaSyncAlt } from "react-icons/fa";
@@ -33,25 +34,35 @@ const switchUser = callable<[string, string, string?], { success: boolean; error
 // Check for pending game launch - called when frontend loads
 const triggerPendingLaunch = callable<[], void>("trigger_pending_launch");
 
+// Settings management
+const getSetting = callable<[string, any], any>("get_setting");
+const setSetting = callable<[string, any], boolean>("set_setting");
+
+// Settings keys
+const SETTING_SHOW_CONFIRMATION = "show_switch_confirmation";
+
 function Content() {
   const [users, setUsers] = useState<SteamUser[]>([]);
   const [currentUser, setCurrentUser] = useState<SteamUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorHeader, setErrorHeader] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(true);
 
   const loadUsers = async () => {
     setLoading(true);
     setErrorHeader(null);
     try {
       console.log("Fetching users...");
-      const [usersData, currentUserData] = await Promise.all([
+      const [usersData, currentUserData, confirmationSetting] = await Promise.all([
         getUsers(),
         getCurrentUser(),
+        getSetting(SETTING_SHOW_CONFIRMATION, true)
       ]);
       console.log("Users fetched:", usersData);
       setUsers(usersData || []);
       setCurrentUser(currentUserData);
+      setShowConfirmation(confirmationSetting !== false);
     } catch (error: any) {
       console.error("Error loading users:", error);
       setErrorHeader(error?.message || "Failed to load users");
@@ -64,8 +75,36 @@ function Content() {
     loadUsers();
   }, []);
 
+  const doSwitch = async (user: SteamUser, disableConfirmation?: boolean) => {
+    setSwitching(true);
+    try {
+      // If user chose "Don't ask again", save the setting
+      if (disableConfirmation) {
+        await setSetting(SETTING_SHOW_CONFIRMATION, false);
+        setShowConfirmation(false);
+      }
+      const result = await switchUser(user.steamid, user.accountName);
+      if (result.success) {
+        console.log("Switch user success (Dry Run)");
+        loadUsers();
+      } else {
+        console.error("Error switching user:", result.error);
+      }
+    } catch (error) {
+      console.error("Error switching user:", error);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
   const handleSwitchUser = async (user: SteamUser) => {
     if (user.steamid === currentUser?.steamid) {
+      return;
+    }
+
+    // Skip confirmation if disabled
+    if (!showConfirmation) {
+      doSwitch(user);
       return;
     }
 
@@ -75,29 +114,32 @@ function Content() {
         strDescription={`Switch to ${user.personaName}? Steam will restart.`}
         strOKButtonText="Switch"
         strCancelButtonText="Cancel"
-        onOK={async () => {
-          setSwitching(true);
-          try {
-            const result = await switchUser(user.steamid, user.accountName);
-            if (result.success) {
-              console.log("Switch user success (Dry Run)");
-              // Wait a moment before restarting
-              // await new Promise(resolve => setTimeout(resolve, 500));
-              // await restartSteam();
-              
-              // For testing: just reload users
-              loadUsers();
-            } else {
-              console.error("Error switching user:", result.error);
-            }
-          } catch (error) {
-            console.error("Error switching user:", error);
-          } finally {
-            setSwitching(false);
-          }
-        }}
-      />
+        onOK={() => doSwitch(user)}
+        onCancel={() => {}}
+      >
+        <Focusable style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+          <input 
+            type="checkbox" 
+            id="dontAskAgain"
+            style={{ width: "20px", height: "20px" }}
+            onChange={(e) => {
+              if (e.target.checked) {
+                setSetting(SETTING_SHOW_CONFIRMATION, false);
+                setShowConfirmation(false);
+              }
+            }}
+          />
+          <label htmlFor="dontAskAgain" style={{ opacity: 0.8, fontSize: "13px" }}>
+            Don't ask again
+          </label>
+        </Focusable>
+      </ConfirmModal>
     );
+  };
+
+  const handleToggleConfirmation = async (checked: boolean) => {
+    await setSetting(SETTING_SHOW_CONFIRMATION, checked);
+    setShowConfirmation(checked);
   };
 
   if (loading) {
@@ -191,6 +233,15 @@ function Content() {
           </div>
         </ButtonItem>
       </PanelSectionRow>
+
+      <PanelSectionRow>
+        <ToggleField
+          label="Confirm before switching"
+          description="Show confirmation dialog when switching accounts"
+          checked={showConfirmation}
+          onChange={handleToggleConfirmation}
+        />
+      </PanelSectionRow>
     </PanelSection>
   );
 }
@@ -202,20 +253,23 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   const [targetAccountName, setTargetAccountName] = useState<string | null>(null);
   const [localPlayers, setLocalPlayers] = useState<string[]>([]);
   const [shouldShow, setShouldShow] = useState<boolean>(false);
+  const [showConfirmation, setShowConfirmation] = useState<boolean>(true);
 
   useEffect(() => {
     // console.log("OwnerLabel mounted for AppID:", appId);
     const fetchOwner = async () => {
       try {
         setShouldShow(false);
-        // Fetch all data in parallel
-        const [ownerData, currentUser, allUsers, localOwnersIds] = await Promise.all([
+        // Fetch all data in parallel, including confirmation setting
+        const [ownerData, currentUser, allUsers, localOwnersIds, confirmSetting] = await Promise.all([
             getGameOwner(appId),
             getCurrentUser(),
             getUsers(),
-            getLocalOwners(appId)
+            getLocalOwners(appId),
+            getSetting(SETTING_SHOW_CONFIRMATION, true)
         ]);
         
+        setShowConfirmation(confirmSetting !== false);
         console.log("[MultiUser] Data Fetch:", { appId, ownerData, localOwnersIds });
 
         // --- 1. Identify License Owner ---
@@ -241,7 +295,7 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                 } else {
                     // Remote user - try to fetch web info or just show ID for now
                     // We can do the async fetch separately if needed, but for now denote as Remote
-                    licenseOwnerDisplayName = `Remote (${id})`;
+                    licenseOwnerDisplayName = id;
                     
                     // Optional: Fire and forget remote fetch? 
                     // Keeping it simple for now to avoid React state race conditions in this snippet
@@ -252,8 +306,8 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                                 const text = await res.text();
                                 const nameMatch = text.match(/<steamID><!\[CDATA\[(.*?)\]\]><\/steamID>/) || text.match(/<steamID>(.*?)<\/steamID>/);
                                 if (nameMatch && nameMatch[1]) {
-                                     const newName = nameMatch[1] + " (Remote)";
-                                     setOwnerName(prev => (prev && prev.includes("Remote")) ? newName : prev);
+                                     const newName = nameMatch[1];
+                                     setOwnerName(prev => prev?.startsWith('7656') ? newName : prev);
                                 }
                             }
                         });
@@ -279,13 +333,15 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
         // --- 2. Identify Local Players (Config Owners) ---
         const playerNames: string[] = [];
         let firstLocalPlayer: SteamUser | null = null;
+        let currentUserCanPlay = false;
 
         if (localOwnersIds && localOwnersIds.length > 0) {
             for (const id of localOwnersIds) {
                 const user = allUsers.find(u => u.steamid === id);
                 if (user) {
                      if (currentUser && user.steamid === currentUser.steamid) {
-                         playerNames.push("You");
+                         // Current user can already play this game
+                         currentUserCanPlay = true;
                      } else {
                          playerNames.push(user.personaName);
                          if (!firstLocalPlayer) {
@@ -294,6 +350,11 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                      }
                 }
             }
+        }
+
+        // If current user can already play, no need to show switch option
+        if (currentUserCanPlay) {
+            return;
         }
         setLocalPlayers(playerNames);
         
@@ -329,6 +390,28 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
 
   const handleOwnerClick = () => {
       if (!targetId || !targetName || !targetAccountName) return;
+
+      const doSwitchAndPlay = async (disableConfirmation?: boolean) => {
+        try {
+          // If user chose "Don't ask again", save the setting
+          if (disableConfirmation) {
+            await setSetting(SETTING_SHOW_CONFIRMATION, false);
+            setShowConfirmation(false);
+          }
+          // Switch user and restart steam in one go (Backend handles sequence)
+          // Pass: steamid, accountName, appid
+          // We don't await result because backend kills steam, terminating connection.
+          switchUser(targetId, targetAccountName, appId);
+        } catch (e) {
+          console.error("Switch exception", e);
+        }
+      };
+
+      // Skip confirmation if disabled
+      if (!showConfirmation) {
+        doSwitchAndPlay();
+        return;
+      }
       
       showModal(
         <ConfirmModal
@@ -336,17 +419,26 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
             strDescription={`Switch to ${targetName} to play this game? Steam will restart and launch the game.`}
             strOKButtonText="Switch User & Play"
             strCancelButtonText="Cancel"
-            onOK={async () => {
-                try {
-                    // Switch user and restart steam in one go (Backend handles sequence)
-                    // Pass: steamid, accountName, appid
-                    // We don't await result because backend kills steam, terminating connection.
-                    switchUser(targetId, targetAccountName, appId);
-                } catch (e) {
-                    console.error("Switch exception", e);
+            onOK={() => doSwitchAndPlay()}
+            onCancel={() => {}}
+        >
+          <Focusable style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+            <input 
+              type="checkbox" 
+              id="dontAskAgainGame"
+              style={{ width: "20px", height: "20px" }}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSetting(SETTING_SHOW_CONFIRMATION, false);
+                  setShowConfirmation(false);
                 }
-            }}
-        />
+              }}
+            />
+            <label htmlFor="dontAskAgainGame" style={{ opacity: 0.8, fontSize: "13px" }}>
+              Don't ask again
+            </label>
+          </Focusable>
+        </ConfirmModal>
       );
   };
 
