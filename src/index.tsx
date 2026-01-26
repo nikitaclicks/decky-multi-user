@@ -28,8 +28,8 @@ const getUsers = callable<[], SteamUser[]>("get_users");
 const getCurrentUser = callable<[], SteamUser | null>("get_current_user");
 const getGameOwner = callable<[string], { last_owner?: string; installed_by?: string; _debug_snippet?: string } | null>("get_game_owner");
 const getLocalOwners = callable<[string], string[]>("get_local_owners");
-const switchUser = callable<[string], { success: boolean; error?: string }>("switch_user");
-const restartSteam = callable<[], { success: boolean; error?: string }>("restart_steam");
+const switchUser = callable<[string, string, string?], { success: boolean; error?: string }>("switch_user");
+const debugRegistry = callable<[], { exists: boolean; auto_login_user?: string; remember_password?: string; snippet?: string; error?: string }>("debug_registry");
 
 // Removed old UI injection logic. We use Router Patch now.
 
@@ -78,7 +78,7 @@ function Content() {
         onOK={async () => {
           setSwitching(true);
           try {
-            const result = await switchUser(user.steamid);
+            const result = await switchUser(user.steamid, user.accountName);
             if (result.success) {
               console.log("Switch user success (Dry Run)");
               // Wait a moment before restarting
@@ -187,20 +187,35 @@ function Content() {
           </div>
         </ButtonItem>
       </PanelSectionRow>
+
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={async () => {
+            const result = await debugRegistry();
+            console.log("Registry debug:", result);
+            alert(`AutoLoginUser: ${result.auto_login_user || 'not set'}\nRememberPassword: ${result.remember_password || 'not set'}\nExists: ${result.exists}`);
+          }}
+        >
+          Debug Registry
+        </ButtonItem>
+      </PanelSectionRow>
     </PanelSection>
   );
 }
 
 const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: string]: any }) => {
   const [ownerName, setOwnerName] = useState<string | null>(null);
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [targetName, setTargetName] = useState<string | null>(null);
   const [localPlayers, setLocalPlayers] = useState<string[]>([]);
-  const [status, setStatus] = useState<string>("Checking...");
+  const [shouldShow, setShouldShow] = useState<boolean>(false);
 
   useEffect(() => {
     // console.log("OwnerLabel mounted for AppID:", appId);
     const fetchOwner = async () => {
       try {
-        setStatus("Checking...");
+        setShouldShow(false);
         // Fetch all data in parallel
         const [ownerData, currentUser, allUsers, localOwnersIds] = await Promise.all([
             getGameOwner(appId),
@@ -213,33 +228,40 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
 
         // --- 1. Identify License Owner ---
         let licenseOwnerDisplayName = "Unknown";
+        let isCurrentUser = false;
+        let foundOwnerId: string | null = null;
+        let foundOwnerIsLocal = false;
         
         if (ownerData && ownerData.last_owner) {
-            const ownerId = ownerData.last_owner;
+            const id = ownerData.last_owner;
+            foundOwnerId = id;
             
             // Is it the current user?
-            if (currentUser && ownerId === currentUser.steamid) {
+            if (currentUser && id === currentUser.steamid) {
                 licenseOwnerDisplayName = "You";
+                isCurrentUser = true;
             } else {
                 // Is it a known local user?
-                const localUser = allUsers.find(u => u.steamid === ownerId);
+                const localUser = allUsers.find(u => u.steamid === id);
                 if (localUser) {
                     licenseOwnerDisplayName = localUser.personaName;
+                    foundOwnerIsLocal = true;
                 } else {
                     // Remote user - try to fetch web info or just show ID for now
                     // We can do the async fetch separately if needed, but for now denote as Remote
-                    licenseOwnerDisplayName = `Remote (${ownerId})`;
+                    licenseOwnerDisplayName = `Remote (${id})`;
                     
                     // Optional: Fire and forget remote fetch? 
                     // Keeping it simple for now to avoid React state race conditions in this snippet
                     try {
                         // Quick sync check if we can (async inside async)
-                        fetchNoCors(`https://steamcommunity.com/profiles/${ownerId}/?xml=1`).then(async res => {
+                        fetchNoCors(`https://steamcommunity.com/profiles/${id}/?xml=1`).then(async res => {
                             if (res.ok) {
                                 const text = await res.text();
                                 const nameMatch = text.match(/<steamID><!\[CDATA\[(.*?)\]\]><\/steamID>/) || text.match(/<steamID>(.*?)<\/steamID>/);
                                 if (nameMatch && nameMatch[1]) {
-                                     setOwnerName(prev => (prev && prev.includes("Remote")) ? `${nameMatch[1]} (Remote)` : prev);
+                                     const newName = nameMatch[1] + " (Remote)";
+                                     setOwnerName(prev => (prev && prev.includes("Remote")) ? newName : prev);
                                 }
                             }
                         });
@@ -247,10 +269,25 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                 }
             }
         }
+        
+        if (isCurrentUser) {
+            // Do not show for games owned by current user
+            return;
+        }
+
+        // Only show if we found an owner (meaning it's installed and we can identify it)
+        // or if there are local players potentially?
+        // For now, if owner is "Unknown" (e.g. uninstalled), we hide it too to avoid clutter
+        if (licenseOwnerDisplayName === "Unknown") {
+            return;
+        }
+
         setOwnerName(licenseOwnerDisplayName);
 
         // --- 2. Identify Local Players (Config Owners) ---
         const playerNames: string[] = [];
+        let firstLocalPlayer: SteamUser | null = null;
+
         if (localOwnersIds && localOwnersIds.length > 0) {
             for (const id of localOwnersIds) {
                 const user = allUsers.find(u => u.steamid === id);
@@ -259,35 +296,72 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                          playerNames.push("You");
                      } else {
                          playerNames.push(user.personaName);
+                         if (!firstLocalPlayer) {
+                             firstLocalPlayer = user;
+                         }
                      }
                 }
             }
         }
         setLocalPlayers(playerNames);
-        setStatus("Ready");
+        
+        // Determine Switch Target (Prioritize Local Player -> Then Owner if Local)
+        if (firstLocalPlayer) {
+            setTargetId(firstLocalPlayer.steamid);
+            setTargetName(firstLocalPlayer.personaName);
+        } else if (foundOwnerId && foundOwnerIsLocal) {
+            // If no one played it yet, but the owner is local, switch to owner
+            const ownerUser = allUsers.find(u => u.steamid === foundOwnerId);
+            if (ownerUser) {
+                setTargetId(ownerUser.steamid);
+                setTargetName(ownerUser.personaName);
+            }
+        } else {
+            // Owner is remote? Can't switch.
+            setTargetId(null);
+            setTargetName(null);
+        }
+
+        setShouldShow(true);
 
       } catch (e) {
         console.error("Error fetching owner for label", e);
-        setStatus("Error");
+        setShouldShow(false);
       }
     };
     fetchOwner();
   }, [appId]);
 
-  // Debugging: Get button state from overview if available
-  const buttonState = overview?.display_status || overview?.status_string || "Unknown State";
-
-  if (status === "Checking...") {
-      return (
-        <PanelSectionRow>
-             <div style={{ padding: "10px", opacity: 0.7 }}>Checking ownership...</div>
-        </PanelSectionRow>
+  const handleOwnerClick = () => {
+      if (!targetId || !targetName) return;
+      
+      showModal(
+        <ConfirmModal
+            strTitle="Switch Account"
+            strDescription={`Switch to ${targetName} to play this game? Steam will restart and launch the game.`}
+            strOKButtonText="Switch & Play"
+            strCancelButtonText="Cancel"
+            onOK={async () => {
+                try {
+                    // Switch user and restart steam in one go (Backend handles sequence)
+                    // We don't await result because backend kills steam, terminating connection.
+                    switchUser(targetId, appId);
+                } catch (e) {
+                    console.error("Switch exception", e);
+                }
+            }}
+        />
       );
+  };
+
+  if (!shouldShow) {
+      return null;
   }
 
   return (
     <PanelSectionRow>
-     <div style={{
+     <div 
+        style={{
           padding: "10px",
           backgroundColor: "#3d4450", 
           borderRadius: "4px",
@@ -321,12 +395,26 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                     No local config found
                 </div>
             )}
-
-            {/* Debug State */}
-            {/* <div style={{ fontSize: "0.7em", opacity: 0.5, marginTop: "4px" }}>
-                State: {buttonState} (ID: {appId})
-            </div> */}
         </div>
+        
+        {targetId && (
+            <ButtonItem
+                layout="below"
+                onClick={handleOwnerClick}
+                style={{
+                    width: "auto",
+                    minWidth: "80px",
+                    padding: "4px 12px",
+                    fontSize: "0.9em",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "auto"
+                }}
+            >
+                Switch
+            </ButtonItem>
+        )}
       </div>
     </PanelSectionRow>
   );

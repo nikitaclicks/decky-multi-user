@@ -1,7 +1,9 @@
 import asyncio
 import os
 import re
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 # The decky plugin module is located at decky-loader/plugin
@@ -15,6 +17,8 @@ class Plugin:
     STEAM_CONFIG_PATH = Path("/home/deck/.local/share/Steam/config")
     LOGINUSERS_VDF = STEAM_CONFIG_PATH / "loginusers.vdf"
     USERDATA_PATH = Path("/home/deck/.local/share/Steam/userdata")
+    # Registry file contains AutoLoginUser - key for account switching!
+    REGISTRY_VDF = Path("/home/deck/.steam/registry.vdf")
     
     # Asyncio-compatible long-running code, executed in a task when the plugin is loaded
     async def _main(self):
@@ -34,36 +38,80 @@ class Plugin:
     async def _migration(self):
         decky.logger.info("Migrating Multi-User Manager")
     
+    async def debug_registry(self):
+        """Debug method to inspect registry.vdf contents"""
+        try:
+            result = {"exists": False, "auto_login_user": None, "remember_password": None, "snippet": ""}
+            
+            if self.REGISTRY_VDF.exists():
+                result["exists"] = True
+                with open(self.REGISTRY_VDF, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Extract AutoLoginUser
+                auto_match = re.search(r'"AutoLoginUser"\s+"([^"]*)"', content, re.IGNORECASE)
+                if auto_match:
+                    result["auto_login_user"] = auto_match.group(1)
+                
+                # Extract RememberPassword
+                remember_match = re.search(r'"RememberPassword"\s+"([^"]*)"', content, re.IGNORECASE)
+                if remember_match:
+                    result["remember_password"] = remember_match.group(1)
+                
+                # Find the Steam section for context
+                steam_section = re.search(r'"HKCU".*?"Software".*?"Valve".*?"Steam"[^{]*\{([^}]{0,1000})', content, re.DOTALL | re.IGNORECASE)
+                if steam_section:
+                    result["snippet"] = steam_section.group(1)[:500]
+                else:
+                    result["snippet"] = content[:500]
+            
+            decky.logger.info(f"Debug registry: {result}")
+            return result
+        except Exception as e:
+            decky.logger.error(f"Debug registry error: {e}")
+            return {"error": str(e)}
+
     async def get_users(self):
         """Get list of all Steam users from loginusers.vdf"""
+        decky.logger.info("get_users called")
         try:
             if not self.LOGINUSERS_VDF.exists():
                 decky.logger.error(f"loginusers.vdf not found at {self.LOGINUSERS_VDF}")
                 return []
             
+            # Read line by line first debug
+            # decky.logger.info(f"Reading {self.LOGINUSERS_VDF}")
+            
             with open(self.LOGINUSERS_VDF, 'r', encoding='utf-8') as f:
                 content = f.read()
             
+            decky.logger.info(f"File read, size: {len(content)}")
+
             users = []
             # Parse VDF format to extract user information
-            user_blocks = re.finditer(r'"(\d+)"\s*\{([^}]+)\}', content, re.DOTALL)
+            # Using finditer with DOTALL to match multiline blocks
+            user_blocks = list(re.finditer(r'"(\d+)"\s*\{([^}]+)\}', content, re.DOTALL))
             
+            decky.logger.info(f"Found {len(user_blocks)} user blocks")
+
             for match in user_blocks:
                 steamid = match.group(1)
                 user_data = match.group(2)
+                # decky.logger.info(f"Parsing user {steamid}")
                 
-                # Extract account name
-                account_match = re.search(r'"AccountName"\s+"([^"]+)"', user_data)
-                persona_match = re.search(r'"PersonaName"\s+"([^"]+)"', user_data)
-                recent_match = re.search(r'"mostrecent"\s+"([^"]+)"', user_data)
-                timestamp_match = re.search(r'"Timestamp"\s+"([^"]+)"', user_data)
+                # Extract fields with forgiving regex (ignoring case for keys)
+                account_match = re.search(r'"AccountName"\s+"([^"]+)"', user_data, re.IGNORECASE)
+                persona_match = re.search(r'"PersonaName"\s+"([^"]+)"', user_data, re.IGNORECASE)
+                recent_match = re.search(r'"mostrecent"\s+"([^"]+)"', user_data, re.IGNORECASE)
+                timestamp_match = re.search(r'"Timestamp"\s+"([^"]+)"', user_data, re.IGNORECASE)
                 
                 if account_match:
                     users.append({
-                        'steamid': steamid,
+                         # Ensure types are correct for frontend
+                        'steamid': str(steamid),
                         'accountName': account_match.group(1),
                         'personaName': persona_match.group(1) if persona_match else account_match.group(1),
-                        'mostRecent': recent_match.group(1) == "1" if recent_match else False,
+                        'mostRecent': (recent_match.group(1) == "1") if recent_match else False,
                         'timestamp': int(timestamp_match.group(1)) if timestamp_match else 0
                     })
             
@@ -74,6 +122,7 @@ class Plugin:
             
         except Exception as e:
             decky.logger.error(f"Error reading users: {e}")
+            # decky.logger.exception("Stack trace:") # Commenting out to ensure stability
             return []
     
     async def get_current_user(self):
@@ -206,71 +255,129 @@ class Plugin:
                 
         return owners
 
-    async def switch_user(self, steamid: str):
-        """Switch to a different Steam user by updating loginusers.vdf"""
+    async def switch_user(self, steamid: str, username: str, appid: str = None):
+        """Switch to a different Steam user by modifying registry.vdf and loginusers.vdf"""
         try:
-            if not self.LOGINUSERS_VDF.exists():
-                decky.logger.error("loginusers.vdf not found during switch")
-                return {"success": False, "error": "loginusers.vdf not found"}
+            decky.logger.info(f"Switching to user: {username} (steamid: {steamid})")
             
-            # Read current file
-            with open(self.LOGINUSERS_VDF, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            decky.logger.info(f"Read {len(content)} chars from loginusers.vdf")
- 
-            # Update mostrecent flags
-            # First, set all to "0"
-            content = re.sub(
-                r'"mostrecent"\s+"1"',
-                '"mostrecent"\t\t"0"',
-                content,
-                flags=re.IGNORECASE
-            )
-            
-            # Then set the target user to "1"
-            # Find the specific user block and update it
-            # We use a more robust pattern
-            pattern = rf'("{steamid}"\s*\{{[^}}]*"mostrecent"\s+)"0"'
-            
-            # Check if we can find the user first
-            if steamid not in content:
-                decky.logger.error(f"User {steamid} not found in file content")
-                return {"success": False, "error": "User ID not found in VDF"}
+            # 1. Modify registry.vdf - Contains AutoLoginUser which Steam checks on startup
+            if self.REGISTRY_VDF.exists():
+                decky.logger.info(f"Modifying registry.vdf at {self.REGISTRY_VDF}")
+                with open(self.REGISTRY_VDF, 'r', encoding='utf-8') as f:
+                    registry_content = f.read()
                 
-            content = re.sub(
-                pattern,
-                r'\1"1"',
-                content,
-                flags=re.DOTALL | re.IGNORECASE
-            )
+                # Set AutoLoginUser to target username
+                original_registry = registry_content
+                registry_content = re.sub(
+                    r'("AutoLoginUser"\s+")[^"]*"',
+                    rf'\1{username}"',
+                    registry_content,
+                    flags=re.IGNORECASE
+                )
+                
+                # Ensure RememberPassword is enabled
+                registry_content = re.sub(
+                    r'("RememberPassword"\s+")[^"]*"',
+                    r'\g<1>1"',
+                    registry_content,
+                    flags=re.IGNORECASE
+                )
+                
+                if registry_content != original_registry:
+                    decky.logger.info("registry.vdf modified, writing...")
+                    with open(self.REGISTRY_VDF, 'w', encoding='utf-8') as f:
+                        f.write(registry_content)
+                    try:
+                        shutil.chown(self.REGISTRY_VDF, user="deck", group="deck")
+                    except Exception as e:
+                        decky.logger.warn(f"Failed to chown registry.vdf: {e}")
+                else:
+                    decky.logger.warn("No changes made to registry.vdf - pattern not found")
+            else:
+                decky.logger.warn(f"registry.vdf not found at {self.REGISTRY_VDF}")
             
-            # Write back to file
-            # with open(self.LOGINUSERS_VDF, 'w', encoding='utf-8') as f:
-            #     f.write(content)
+            # 2. Modify loginusers.vdf - Set mostrecent flag
+            if self.LOGINUSERS_VDF.exists():
+                decky.logger.info(f"Modifying loginusers.vdf at {self.LOGINUSERS_VDF}")
+                with open(self.LOGINUSERS_VDF, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Reset all mostrecent and AllowAutoLogin to "0"
+                content = re.sub(
+                    r'("mostrecent"\s+)"1"',
+                    r'\1"0"',
+                    content,
+                    flags=re.IGNORECASE
+                )
+                content = re.sub(
+                    r'("AllowAutoLogin"\s+)"1"',
+                    r'\1"0"',
+                    content,
+                    flags=re.IGNORECASE
+                )
+                
+                # Set target user's mostrecent and AllowAutoLogin to "1"
+                # Find the user block and modify within it
+                def set_user_flags(match):
+                    block = match.group(0)
+                    block = re.sub(r'("mostrecent"\s+)"0"', r'\1"1"', block, flags=re.IGNORECASE)
+                    block = re.sub(r'("AllowAutoLogin"\s+)"0"', r'\1"1"', block, flags=re.IGNORECASE)
+                    return block
+                
+                content = re.sub(
+                    rf'"{steamid}"\s*\{{[^}}]+\}}',
+                    set_user_flags,
+                    content,
+                    flags=re.DOTALL
+                )
+                
+                # Update timestamp
+                ts_now = int(time.time())
+                content = re.sub(
+                    rf'("{steamid}"\s*\{{[^}}]*"Timestamp"\s+)"\d+"',
+                    rf'\g<1>"{ts_now}"',
+                    content,
+                    flags=re.DOTALL | re.IGNORECASE
+                )
+                
+                decky.logger.info("loginusers.vdf modified, writing...")
+                with open(self.LOGINUSERS_VDF, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                try:
+                    shutil.chown(self.LOGINUSERS_VDF, user="deck", group="deck")
+                except Exception as e:
+                    decky.logger.warn(f"Failed to chown loginusers.vdf: {e}")
             
-            decky.logger.info(f"[DRY-RUN] Would have switched to user {steamid}")
-            decky.logger.info(f"[DRY-RUN] Updated content length would be: {len(content)}")
-            
-            return {"success": True, "steamid": steamid}
+            decky.logger.info("Config files updated, restarting Steam...")
+            return await self.restart_steam(appid)
             
         except Exception as e:
             decky.logger.error(f"Error switching user: {e}")
             decky.logger.exception("Full stack trace:")
             return {"success": False, "error": str(e)}
-    
-    async def restart_steam(self):
-        """Restart Steam to apply user changes"""
+
+    async def restart_steam(self, appid: str = None, username: str = None):
+        """Restart Steam to apply user changes. Optionally launch a game."""
         try:
+            decky.logger.info(f"Restarting Steam. AppID to launch: {appid}")
+            
             # Kill Steam processes
             subprocess.run(['killall', '-9', 'steam'], check=False)
             subprocess.run(['killall', '-9', 'steamwebhelper'], check=False)
             
-            # Wait a moment
-            await asyncio.sleep(1)
+            # Wait for processes to fully terminate
+            await asyncio.sleep(2)
             
-            # Restart Steam
-            subprocess.Popen(['steam', '-silent'], 
+            # Restart Steam - don't use -login as it requires password
+            # Instead rely on registry.vdf AutoLoginUser
+            cmd = ['steam']
+            if appid:
+                cmd.extend(['-applaunch', str(appid)])
+            # Note: -login username requires password, removed
+            # The AutoLoginUser in registry.vdf handles auto-login
+
+            decky.logger.info(f"Starting Steam with: {' '.join(cmd)}")
+            subprocess.Popen(cmd, 
                            stdout=subprocess.DEVNULL, 
                            stderr=subprocess.DEVNULL,
                            start_new_session=True)
