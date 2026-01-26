@@ -12,6 +12,12 @@ from pathlib import Path
 # and add the `decky-loader/plugin/imports` path to `python.analysis.extraPaths` in `.vscode/settings.json`
 import decky
 
+# Initialize decky-loader settings manager
+from settings import SettingsManager
+settingsDir = os.environ.get("DECKY_PLUGIN_SETTINGS_DIR", "/tmp")
+settings = SettingsManager(name="settings", settings_directory=settingsDir)
+settings.read()
+
 
 class Plugin:
     # Hardcode path for Steam Deck as Decky plugins might run as root
@@ -30,6 +36,17 @@ class Plugin:
         decky.logger.info(f"File exists: {self.PENDING_LAUNCH_FILE.exists()}")
         # Check for pending game launch after account switch
         asyncio.create_task(self._check_pending_launch())
+
+    # Settings management
+    async def get_setting(self, key: str, default):
+        """Get a setting value"""
+        return settings.getSetting(key, default)
+    
+    async def set_setting(self, key: str, value):
+        """Set a setting value"""
+        settings.setSetting(key, value)
+        settings.commit()
+        return True
 
     async def _check_pending_launch(self):
         """Check if there's a pending game launch after account switch"""
