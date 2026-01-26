@@ -1,6 +1,6 @@
 {
   "name": "decky-multi-user",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A Decky plugin to quickly switch accounts from the library.",
   "type": "module",
   "scripts": {
