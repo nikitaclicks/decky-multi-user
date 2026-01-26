@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -19,10 +20,79 @@ class Plugin:
     USERDATA_PATH = Path("/home/deck/.local/share/Steam/userdata")
     # Registry file contains AutoLoginUser - key for account switching!
     REGISTRY_VDF = Path("/home/deck/.steam/registry.vdf")
+    # File to store pending game launch after account switch
+    PENDING_LAUNCH_FILE = Path("/tmp/decky_multiuser_pending_launch.json")
     
     # Asyncio-compatible long-running code, executed in a task when the plugin is loaded
     async def _main(self):
         decky.logger.info("Multi-User Manager loaded")
+        decky.logger.info(f"Checking for pending launch file at: {self.PENDING_LAUNCH_FILE}")
+        decky.logger.info(f"File exists: {self.PENDING_LAUNCH_FILE.exists()}")
+        # Check for pending game launch after account switch
+        asyncio.create_task(self._check_pending_launch())
+
+    async def _check_pending_launch(self):
+        """Check if there's a pending game launch after account switch"""
+        try:
+            decky.logger.info(f"_check_pending_launch called, file exists: {self.PENDING_LAUNCH_FILE.exists()}")
+            
+            if not self.PENDING_LAUNCH_FILE.exists():
+                decky.logger.info("No pending launch file found")
+                return
+            
+            decky.logger.info("Found pending launch file, reading...")
+            with open(self.PENDING_LAUNCH_FILE, 'r') as f:
+                data = json.load(f)
+            
+            decky.logger.info(f"Pending launch data: {data}")
+            
+            # Delete the file immediately to prevent re-launch loops
+            self.PENDING_LAUNCH_FILE.unlink()
+            decky.logger.info("Pending launch file deleted")
+            
+            appid = data.get('appid')
+            if not appid:
+                decky.logger.warn("Pending launch file had no appid")
+                return
+            
+            decky.logger.info(f"Pending game launch detected: {appid}")
+            
+            # Wait a bit for Steam to fully initialize after login
+            # This delay is crucial - Steam needs time to complete login
+            delay = data.get('delay', 30)
+            decky.logger.info(f"Waiting {delay}s for Steam to be ready...")
+            await asyncio.sleep(delay)
+            
+            # Launch the game using steam:// URL protocol
+            # Must run as deck user since Decky runs as root but Steam runs as deck
+            decky.logger.info(f"Launching game {appid}...")
+            result = subprocess.run(
+                ['sudo', '-u', 'deck', 'steam', f'steam://rungameid/{appid}'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            decky.logger.info(f"Game {appid} launch triggered, returncode: {result.returncode}")
+            if result.stderr:
+                decky.logger.warn(f"Launch stderr: {result.stderr}")
+            
+        except Exception as e:
+            decky.logger.error(f"Error checking pending launch: {e}")
+            import traceback
+            decky.logger.error(traceback.format_exc())
+            # Clean up file if it exists
+            if self.PENDING_LAUNCH_FILE.exists():
+                self.PENDING_LAUNCH_FILE.unlink()
+
+    def _save_pending_launch(self, appid: str, delay: int = 3):
+        """Save appid for launch after Steam restart. Delay is short since frontend triggers after Steam is up."""
+        try:
+            data = {'appid': appid, 'delay': delay, 'timestamp': time.time()}
+            with open(self.PENDING_LAUNCH_FILE, 'w') as f:
+                json.dump(data, f)
+            decky.logger.info(f"Saved pending launch: {appid}")
+        except Exception as e:
+            decky.logger.error(f"Error saving pending launch: {e}")
 
     # Function called first during the unload process, utilize this to handle your plugin being stopped, but not
     # completely removed
@@ -38,6 +108,32 @@ class Plugin:
     async def _migration(self):
         decky.logger.info("Migrating Multi-User Manager")
     
+    async def trigger_pending_launch(self):
+        """Called by frontend when it loads - checks for pending game launch"""
+        decky.logger.info("trigger_pending_launch called by frontend")
+        asyncio.create_task(self._check_pending_launch())
+    
+    async def test_pending_launch(self, appid: str):
+        """Test method to manually trigger pending launch check"""
+        decky.logger.info(f"test_pending_launch called with appid: {appid}")
+        # Save the file
+        self._save_pending_launch(appid, delay=5)
+        # Now check it
+        await self._check_pending_launch()
+        return {"success": True, "message": f"Triggered launch for {appid}"}
+
+    async def check_pending_file(self):
+        """Debug method to check if pending file exists"""
+        exists = self.PENDING_LAUNCH_FILE.exists()
+        content = None
+        if exists:
+            try:
+                with open(self.PENDING_LAUNCH_FILE, 'r') as f:
+                    content = f.read()
+            except Exception as e:
+                content = str(e)
+        return {"exists": exists, "path": str(self.PENDING_LAUNCH_FILE), "content": content}
+
     async def debug_registry(self):
         """Debug method to inspect registry.vdf contents"""
         try:
@@ -368,13 +464,15 @@ class Plugin:
             # Wait for processes to fully terminate
             await asyncio.sleep(2)
             
-            # Restart Steam - don't use -login as it requires password
-            # Instead rely on registry.vdf AutoLoginUser
-            cmd = ['steam']
+            # If we have an appid to launch, save it for after Steam restarts
+            # We can't use -applaunch because Steam needs to complete login first
             if appid:
-                cmd.extend(['-applaunch', str(appid)])
-            # Note: -login username requires password, removed
-            # The AutoLoginUser in registry.vdf handles auto-login
+                self._save_pending_launch(appid)
+            
+            # Restart Steam - rely on registry.vdf AutoLoginUser for login
+            cmd = ['steam']
+            # Note: Don't use -applaunch here - it runs before login completes
+            # The pending launch system will handle game launch after login
 
             decky.logger.info(f"Starting Steam with: {' '.join(cmd)}")
             subprocess.Popen(cmd, 

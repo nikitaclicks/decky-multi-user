@@ -30,8 +30,13 @@ const getGameOwner = callable<[string], { last_owner?: string; installed_by?: st
 const getLocalOwners = callable<[string], string[]>("get_local_owners");
 const switchUser = callable<[string, string, string?], { success: boolean; error?: string }>("switch_user");
 const debugRegistry = callable<[], { exists: boolean; auto_login_user?: string; remember_password?: string; snippet?: string; error?: string }>("debug_registry");
+const testPendingLaunch = callable<[string], { success: boolean; message: string }>("test_pending_launch");
+const checkPendingFile = callable<[], { exists: boolean; path: string; content: string | null }>("check_pending_file");
 
 // Removed old UI injection logic. We use Router Patch now.
+
+// Check for pending game launch - called when frontend loads
+const triggerPendingLaunch = callable<[], void>("trigger_pending_launch");
 
 function Content() {
   const [users, setUsers] = useState<SteamUser[]>([]);
@@ -62,6 +67,8 @@ function Content() {
 
   useEffect(() => {
     loadUsers();
+    // Check for pending game launch when frontend loads (after Steam restart)
+    triggerPendingLaunch().catch(e => console.error("Pending launch check failed:", e));
   }, []);
 
   const handleSwitchUser = async (user: SteamUser) => {
@@ -200,6 +207,33 @@ function Content() {
           Debug Registry
         </ButtonItem>
       </PanelSectionRow>
+
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={async () => {
+            const result = await checkPendingFile();
+            console.log("Pending file check:", result);
+            alert(`Exists: ${result.exists}\nPath: ${result.path}\nContent: ${result.content || 'N/A'}`);
+          }}
+        >
+          Check Pending File
+        </ButtonItem>
+      </PanelSectionRow>
+
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={async () => {
+            // Test with a common game like Aperture Desk Job (appid 1902490)
+            const result = await testPendingLaunch("1902490");
+            console.log("Test launch result:", result);
+            alert(result.message);
+          }}
+        >
+          Test Launch (Desk Job)
+        </ButtonItem>
+      </PanelSectionRow>
     </PanelSection>
   );
 }
@@ -208,6 +242,7 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   const [ownerName, setOwnerName] = useState<string | null>(null);
   const [targetId, setTargetId] = useState<string | null>(null);
   const [targetName, setTargetName] = useState<string | null>(null);
+  const [targetAccountName, setTargetAccountName] = useState<string | null>(null);
   const [localPlayers, setLocalPlayers] = useState<string[]>([]);
   const [shouldShow, setShouldShow] = useState<boolean>(false);
 
@@ -309,17 +344,20 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
         if (firstLocalPlayer) {
             setTargetId(firstLocalPlayer.steamid);
             setTargetName(firstLocalPlayer.personaName);
+            setTargetAccountName(firstLocalPlayer.accountName);
         } else if (foundOwnerId && foundOwnerIsLocal) {
             // If no one played it yet, but the owner is local, switch to owner
             const ownerUser = allUsers.find(u => u.steamid === foundOwnerId);
             if (ownerUser) {
                 setTargetId(ownerUser.steamid);
                 setTargetName(ownerUser.personaName);
+                setTargetAccountName(ownerUser.accountName);
             }
         } else {
             // Owner is remote? Can't switch.
             setTargetId(null);
             setTargetName(null);
+            setTargetAccountName(null);
         }
 
         setShouldShow(true);
@@ -333,7 +371,7 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   }, [appId]);
 
   const handleOwnerClick = () => {
-      if (!targetId || !targetName) return;
+      if (!targetId || !targetName || !targetAccountName) return;
       
       showModal(
         <ConfirmModal
@@ -344,8 +382,9 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
             onOK={async () => {
                 try {
                     // Switch user and restart steam in one go (Backend handles sequence)
+                    // Pass: steamid, accountName, appid
                     // We don't await result because backend kills steam, terminating connection.
-                    switchUser(targetId, appId);
+                    switchUser(targetId, targetAccountName, appId);
                 } catch (e) {
                     console.error("Switch exception", e);
                 }
