@@ -14,8 +14,6 @@ import { definePlugin, callable, routerHook, fetchNoCors } from "@decky/api";
 import { FaUsers, FaUserCircle, FaSyncAlt } from "react-icons/fa";
 import { useState, useEffect, ReactElement } from "react";
 
-// import logo from "../assets/logo.png";
-
 interface SteamUser {
   steamid: string;
   accountName: string;
@@ -53,13 +51,11 @@ function Content() {
     setLoading(true);
     setErrorHeader(null);
     try {
-      console.log("Fetching users...");
       const [usersData, currentUserData, confirmationSetting] = await Promise.all([
         getUsers(),
         getCurrentUser(),
         getSetting(SETTING_SHOW_CONFIRMATION, true)
       ]);
-      console.log("Users fetched:", usersData);
       setUsers(usersData || []);
       setCurrentUser(currentUserData);
       setShowConfirmation(confirmationSetting !== false);
@@ -85,7 +81,6 @@ function Content() {
       }
       const result = await switchUser(user.steamid, user.accountName);
       if (result.success) {
-        console.log("Switch user success (Dry Run)");
         loadUsers();
       } else {
         console.error("Error switching user:", result.error);
@@ -256,7 +251,6 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
   const [showConfirmation, setShowConfirmation] = useState<boolean>(true);
 
   useEffect(() => {
-    // console.log("OwnerLabel mounted for AppID:", appId);
     const fetchOwner = async () => {
       try {
         setShouldShow(false);
@@ -270,9 +264,8 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
         ]);
         
         setShowConfirmation(confirmSetting !== false);
-        console.log("[MultiUser] Data Fetch:", { appId, ownerData, localOwnersIds });
 
-        // --- 1. Identify License Owner ---
+        // Identify License Owner
         let licenseOwnerDisplayName = "Unknown";
         let isCurrentUser = false;
         let foundOwnerId: string | null = null;
@@ -293,12 +286,8 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                     licenseOwnerDisplayName = localUser.personaName;
                     foundOwnerIsLocal = true;
                 } else {
-                    // Remote user - try to fetch web info or just show ID for now
-                    // We can do the async fetch separately if needed, but for now denote as Remote
                     licenseOwnerDisplayName = id;
                     
-                    // Optional: Fire and forget remote fetch? 
-                    // Keeping it simple for now to avoid React state race conditions in this snippet
                     try {
                         // Quick sync check if we can (async inside async)
                         fetchNoCors(`https://steamcommunity.com/profiles/${id}/?xml=1`).then(async res => {
@@ -317,20 +306,15 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
         }
         
         if (isCurrentUser) {
-            // Do not show for games owned by current user
             return;
         }
 
-        // Only show if we found an owner (meaning it's installed and we can identify it)
-        // or if there are local players potentially?
-        // For now, if owner is "Unknown" (e.g. uninstalled), we hide it too to avoid clutter
         if (licenseOwnerDisplayName === "Unknown") {
             return;
         }
 
         setOwnerName(licenseOwnerDisplayName);
 
-        // --- 2. Identify Local Players (Config Owners) ---
         const playerNames: string[] = [];
         let firstLocalPlayer: SteamUser | null = null;
         let currentUserCanPlay = false;
@@ -340,7 +324,6 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                 const user = allUsers.find(u => u.steamid === id);
                 if (user) {
                      if (currentUser && user.steamid === currentUser.steamid) {
-                         // Current user can already play this game
                          currentUserCanPlay = true;
                      } else {
                          playerNames.push(user.personaName);
@@ -352,19 +335,16 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
             }
         }
 
-        // If current user can already play, no need to show switch option
         if (currentUserCanPlay) {
             return;
         }
         setLocalPlayers(playerNames);
         
-        // Determine Switch Target (Prioritize Local Player -> Then Owner if Local)
         if (firstLocalPlayer) {
             setTargetId(firstLocalPlayer.steamid);
             setTargetName(firstLocalPlayer.personaName);
             setTargetAccountName(firstLocalPlayer.accountName);
         } else if (foundOwnerId && foundOwnerIsLocal) {
-            // If no one played it yet, but the owner is local, switch to owner
             const ownerUser = allUsers.find(u => u.steamid === foundOwnerId);
             if (ownerUser) {
                 setTargetId(ownerUser.steamid);
@@ -372,7 +352,6 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
                 setTargetAccountName(ownerUser.accountName);
             }
         } else {
-            // Owner is remote? Can't switch.
             setTargetId(null);
             setTargetName(null);
             setTargetAccountName(null);
@@ -393,21 +372,16 @@ const OwnerLabel = ({ appId, overview }: { appId: string, overview?: any, [key: 
 
       const doSwitchAndPlay = async (disableConfirmation?: boolean) => {
         try {
-          // If user chose "Don't ask again", save the setting
           if (disableConfirmation) {
             await setSetting(SETTING_SHOW_CONFIRMATION, false);
             setShowConfirmation(false);
           }
-          // Switch user and restart steam in one go (Backend handles sequence)
-          // Pass: steamid, accountName, appid
-          // We don't await result because backend kills steam, terminating connection.
           switchUser(targetId, targetAccountName, appId);
         } catch (e) {
           console.error("Switch exception", e);
         }
       };
 
-      // Skip confirmation if disabled
       if (!showConfirmation) {
         doSwitchAndPlay();
         return;
@@ -528,7 +502,6 @@ const patchAppPage = () => {
     return routerHook.addPatch(
         '/library/app/:appid',
         (props: { path: string; children: ReactElement }) => {
-            // console.log("Router Patch triggered for:", props.path);
             afterPatch(
                 props.children.props,
                 'renderFunc',
@@ -537,8 +510,6 @@ const patchAppPage = () => {
                      const overview = ret1.props.children.props.overview;
                      const appId = overview?.appid;
                      if (!appId) return ret1;
-
-                     // console.log("[MultiUser] Patching renderFunc. AppID:", appId);
 
                      wrapReactType(ret1.props.children);
                      afterPatch(
@@ -550,13 +521,9 @@ const patchAppPage = () => {
                                     .children;
                             
                             if (!componentToSplice || !Array.isArray(componentToSplice)) {
-                                // console.log("[MultiUser] componentToSplice is not an array or missing");
                                 return ret2;
                             }
                             
-                            // console.log("[MultiUser] componentToSplice exists:", !!componentToSplice, "Length:", componentToSplice?.length);
-
-                             // Look for where to insert - typically before the game details/overview
                             const spliceIndex = componentToSplice?.findIndex(
                                 (child: ReactElement) => {
                                     return (
@@ -566,31 +533,22 @@ const patchAppPage = () => {
                                 }
                             );
                             
-                            // console.log("[MultiUser] Found spliceIndex:", spliceIndex);
 
-
-                            // CHECK FOR DUPLICATES / EXISTING
-                            // We look for our component to either update or insert it.
                             const existingIndex = componentToSplice?.findIndex((child: any) => {
                                 return child?.type === OwnerLabel || child?.props?._source === "decky-multi-user"; 
                             });
 
-                            // Use a key to force React to remount/reset state when appId changes
                             const component = <OwnerLabel key={appId} appId={appId.toString()} overview={overview} _source="decky-multi-user" />;
 
                             if (existingIndex !== -1) {
-                                // Replace existing instance to ensure props (appId) are updated
-                                // console.log("[MultiUser] Updating existing label for AppID:", appId);
                                 componentToSplice[existingIndex] = component;
                             } else if (spliceIndex > -1) {
-                                // Insert new
                                 componentToSplice.splice(
                                     Math.max(0, spliceIndex),
                                     0,
                                     component
                                 );
                             } else {
-                                // Fallback
                                 console.warn("[MultiUser] Could not find splice index. Attempting fallback unshift.");
                                 if (componentToSplice && Array.isArray(componentToSplice)) {
                                      componentToSplice.unshift(component);
@@ -619,22 +577,17 @@ export default definePlugin(() => {
           try {
               libraryAppPagePatch = patchAppPage();
               if (libraryAppPagePatch) {
-                console.log("[MultiUser] Router patch applied successfully.");
                 return true;
               }
           } catch (e) {
               console.error("[MultiUser] Failed to patch app page", e);
           }
-      } else {
-          // console.log("[MultiUser] routerHook missing.");
       }
       return false;
   };
 
-  // Attempt immediately
   setTimeout(() => {
      if (!tryPatch()) {
-        console.log("[MultiUser] Queuing patch retry...");
         // @ts-ignore
         patchInterval = setInterval(() => {
             if (tryPatch()) {
@@ -643,7 +596,7 @@ export default definePlugin(() => {
             }
         }, 1000);
      }
-  }, 1000); // Wait 1s initially to be safe
+  }, 1000);
 
   return {
     // The name shown in various decky menus
